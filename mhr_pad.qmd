@@ -67,3 +67,95 @@ test_pca_values <- predict(pca_model, newdata = test_data[, 1:6])
 test_pca <- data.frame(test_pca_values[, 1:5])
 test_pca$RiskLevel <- test_data$RiskLevel
 ```
+kNN
+```{r}
+library(class)
+#wyciągamy predyktory i objasniana
+train_x<-train_pca[,1:5]
+test_x<-test_pca[,1:5]
+
+train_y<-train_pca$RiskLevel
+test_y<-test_pca$RiskLevel
+
+knn_pred<-knn(train=train_x,test=test_x,cl=train_y,k=5)
+#tworzymy confusion matrix
+cm_knn<-table(Przewidywane=knn_pred,Prawdziwe=test_y)
+print(cm_knn)
+
+#licze accuracy
+accuracy_knn<-sum(diag(cm_knn))/sum(cm_knn)
+round(accuracy_knn*100,2)
+#wyszlo 66.23 dla k=5, sprawdzam jakei bedzie najlepsze k
+
+wyniki_accuracy<-numeric(30)
+for(i in 1:30){
+  temp_pred<-knn(train=train_x,test=test_x,cl=train_y,k=i)
+  tab<-table(temp_pred,test_y)
+  wyniki_accuracy[i]<-sum(diag(tab))/sum(tab)
+}
+best_k<-which.max(wyniki_accuracy)
+best_acc<-max(wyniki_accuracy)
+plot(1:30,wyniki_accuracy,type="b",main="Optymalizacja hiperparametry k w kNN",xlab="wartosc k",ylab="accuracy")
+
+
+knn_ost<-knn(train=train_x,test=test_x,cl=train_y,k=3)
+cm2<-table(pred=knn_ost,real=test_y)
+acc_knn<-sum(diag(cm2))/sum(cm2)
+round(acc_knn*100,2)
+```
+Wykres optymalizacji hiperparametru K wykazał najwyższą skuteczność dla k=1. Zgodnie z teorią uczenia nieparametrycznego, tak niska wartość K prowadzi do silnego przeuczenia modelu i nadmiernego dopasowania do szumu.
+Ponadto, wynik ten sugeruje obecność zjawiska 'data leakage' spowodowanego duplikatami w zbiorze medycznym (identyczne obserwacje w zbiorze treningowym i testowym). 
+Aby zapewnić lepszą generalizację i uniknąć przeuczenia, do ostatecznego modelu kNN wybrano pierwszy stabilny szczyt dla wartości nieparzystej, czyli k=3 (lub k=5).
+
+
+Wielomianowa Regresja Logistyczna
+```{r}
+library(nnet)
+model_logi<-multinom(RiskLevel~.,data=train_pca,trace=FALSE)
+pred_logi<-predict(model_logi,test_pca)
+tab_logi<-table(pred=pred_logi,real=test_y)
+acc_logi<-sum(diag(tab_logi))/sum(tab_logi)
+round(acc_logi*100,2)
+```
+Drastyczny problem z identyfikacja mid risk - regresja logistyczna probuje wuzmaczuc liniowe granice decyzyjne, a midrisk jest nieliniowo wcisnieta miedzy low i high, lepiej radza sobie algorytmy takie jak kNN, ale jeszcze sprobuje naprawic.
+```{r}
+war_decay<-c(0,0.001,0.01,0.1,0.5,1,2,5)
+wyniki_logit<-numeric(8)
+for(i in 1:8){
+  temp_model<-multinom(RiskLevel~.,data=train_pca,decay=war_decay[i],trace=FALSE)
+  temp_pred<-predict(temp_model,test_pca)
+  temp_tabela<-table(temp_pred,test_pca$RiskLevel)
+  wyniki_logit[i]<-sum(diag(temp_tabela))/sum(temp_tabela)
+}
+best_ix<-which.max(wyniki_logit)
+best_decay<-war_decay[best_ix]
+best_acc_logi<-max(wyniki_logit)
+cat(best_decay,round(best_acc_logi*100,2))
+plot(1:length(war_decay),wyniki_logit,type="b",main="Optymalizacja regularyzacji (decay) w Regresji Logistycznej",xlab="decay",ylab="accuracy",xaxt="n")
+axis(1,at=1:length(war_decay),labels=war_decay)
+
+```
+Optymalizacja decayem w modelu regresji wielomianowej przyniosla jedynie marginalna poprawe skutecznosci. Potwierdza to brak mozliwosci liniowej separacji miedzy klasami ryzyka w badanej przestrzeni wielowymiarowej.
+
+Naiwny Klasyfikator Bayesa
+```{r}
+library(e1071)
+model_nb<-naiveBayes(RiskLevel~.,data=train_pca)
+pred_nb<-predict(model_nb,test_pca)
+tabela_nb<-table(pred=pred_nb,real=test_y)
+print(tabela_nb)
+acc_nb<-sum(diag(tabela_nb))/sum(tabela_nb)
+round(acc_nb*100,2)
+#57.05
+
+model_nb_opt<-naiveBayes(RiskLevel~.,data=train_pca,usekernel=TRUE,laplace=1)
+pred_nb_opt<-predict(model_nb_opt,test_pca)
+tabela_nb_opt <- table(pred = pred_nb_opt, real = test_pca$RiskLevel)
+print(tabela_nb_opt)
+acc_nb_opt <- sum(diag(tabela_nb_opt)) / sum(tabela_nb_opt)
+round(acc_nb_opt*100,2)
+```
+
+Najlepszym modelem mimo wielu prob pozostaje kNN. 
+Modele oparte na rozkładach prawdopodobienstwa i granicach liniowych uzyskaly widocznie slabsze wyniki nawet po zastosowaniu decay i estymacji jadrowej. Powodem spadku ich skutecznosci jest niezdolnosc do sprawnej separacji klasy mid risk. 
+W przypadku analizy zlozonych danych medycznych algorytmy nieliniowe sprawdzaja sie znacznie lepiej niz globalne modele liniowe.
